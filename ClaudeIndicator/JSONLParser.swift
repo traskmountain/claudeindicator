@@ -71,6 +71,11 @@ class JSONLParser {
                 continue
             }
 
+            // Skip non-message types (snapshots, summaries, etc)
+            guard message.type == "assistant" || message.type == "user" else {
+                continue
+            }
+
             // Check if this is an assistant message
             if message.type == "assistant",
                let content = message.message?.content {
@@ -185,12 +190,17 @@ class JSONLParser {
                 continue
             }
 
-            // Extract metadata from first message
+            // Extract metadata from any message type
             if projectPath.isEmpty, let cwd = message.cwd {
                 projectPath = cwd
             }
             if sessionId.isEmpty, let sid = message.sessionId {
                 sessionId = sid
+            }
+
+            // Skip non-message types (snapshots, summaries, etc) for state tracking
+            guard message.type == "assistant" || message.type == "user" else {
+                continue
             }
 
             // Check for AskUserQuestion and tool use
