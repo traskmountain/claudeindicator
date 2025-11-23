@@ -98,34 +98,63 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openTerminalForSession(_ sender: NSMenuItem) {
         guard let session = sender.representedObject as? SessionInfo else { return }
 
-        // Try to find and activate the terminal window
-        // This is a best-effort approach - we'll use AppleScript to find terminals at this path
-        let script = """
-        tell application "System Events"
-            set terminalApps to {"Terminal", "iTerm", "iTerm2", "WezTerm", "Alacritty", "Kitty"}
-            repeat with termApp in terminalApps
-                if exists process termApp then
-                    tell process termApp to set frontmost to true
-                    return
-                end if
-            end repeat
-        end tell
-        """
-
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
-
-        // Also copy the project path to clipboard for convenience
+        // Copy the project path to clipboard
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(session.projectPath, forType: .string)
 
+        // Try to activate Terminal and bring it to front
+        let script = """
+        tell application "System Events"
+            -- Check for various terminal apps
+            set terminalFound to false
+
+            -- Try Terminal
+            if exists process "Terminal" then
+                tell process "Terminal"
+                    set frontmost to true
+                end tell
+                set terminalFound to true
+            end if
+
+            -- Try iTerm2
+            if not terminalFound and exists process "iTerm2" then
+                tell application "iTerm2"
+                    activate
+                end tell
+                set terminalFound to true
+            end if
+
+            -- Try iTerm
+            if not terminalFound and exists process "iTerm" then
+                tell application "iTerm"
+                    activate
+                end tell
+                set terminalFound to true
+            end if
+
+            -- Try WezTerm
+            if not terminalFound and exists process "wezterm-gui" then
+                tell process "wezterm-gui"
+                    set frontmost to true
+                end tell
+                set terminalFound to true
+            end if
+        end tell
+        """
+
+        var errorDict: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&errorDict)
+            if let error = errorDict {
+                print("AppleScript error: \(error)")
+            }
+        }
+
         // Show a notification
         let notification = NSUserNotification()
-        notification.title = "Claude Session"
-        notification.informativeText = "Project path copied: \(extractProjectName(from: session.projectPath))"
+        notification.title = "Terminal Activated"
+        notification.informativeText = "Path copied: \(extractProjectName(from: session.projectPath))"
         notification.soundName = nil
         NSUserNotificationCenter.default.deliver(notification)
     }
