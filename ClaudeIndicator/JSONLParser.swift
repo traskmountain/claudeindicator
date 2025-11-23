@@ -63,6 +63,7 @@ class JSONLParser {
         // Track if we've seen an AskUserQuestion that hasn't been answered
         var hasUnAnsweredQuestion = false
         var lastMessageWasToolUse = false
+        var lastUserPromptAnswered = true  // Track if last user prompt got assistant response
 
         for line in lines {
             guard let jsonData = line.data(using: .utf8),
@@ -70,9 +71,11 @@ class JSONLParser {
                 continue
             }
 
-            // Check if this is an assistant message with AskUserQuestion tool
+            // Check if this is an assistant message
             if message.type == "assistant",
                let content = message.message?.content {
+                // Assistant responded, so last user prompt is answered
+                lastUserPromptAnswered = true
                 // Reset tool use flag
                 lastMessageWasToolUse = false
 
@@ -87,19 +90,30 @@ class JSONLParser {
                 }
             }
 
-            // Check if this is a user message (which would answer the question)
+            // Check if this is a user message
             if message.type == "user" {
-                if hasUnAnsweredQuestion {
-                    // User has responded, question is no longer active
-                    hasUnAnsweredQuestion = false
+                // Check if this is a tool_result (response to assistant's tool use)
+                let isToolResult = message.message?.content?.contains { $0.type == "tool_result" } ?? false
+
+                if isToolResult {
+                    // This is a tool result, so tool completed
+                    lastMessageWasToolUse = false
+                    if hasUnAnsweredQuestion {
+                        // User has responded to AskUserQuestion
+                        hasUnAnsweredQuestion = false
+                    }
+                } else {
+                    // This is a new user prompt - mark as unanswered
+                    lastUserPromptAnswered = false
                 }
-                // User message or tool_result means the tool completed
-                lastMessageWasToolUse = false
             }
         }
 
-        // Return true if there's an unanswered question OR a pending tool execution
-        return hasUnAnsweredQuestion || lastMessageWasToolUse
+        // Return true if:
+        // 1. There's an unanswered AskUserQuestion
+        // 2. There's a pending tool execution
+        // 3. There's a user prompt that hasn't been answered by assistant yet
+        return hasUnAnsweredQuestion || lastMessageWasToolUse || !lastUserPromptAnswered
     }
 
     /// Get all JSONL session files in the Claude projects directory
@@ -161,6 +175,7 @@ class JSONLParser {
 
         var hasUnAnsweredQuestion = false
         var lastMessageWasToolUse = false
+        var lastUserPromptAnswered = true
         var projectPath = ""
         var sessionId = ""
 
@@ -181,6 +196,8 @@ class JSONLParser {
             // Check for AskUserQuestion and tool use
             if message.type == "assistant",
                let content = message.message?.content {
+                // Assistant responded, so last user prompt is answered
+                lastUserPromptAnswered = true
                 lastMessageWasToolUse = false
 
                 for item in content {
@@ -195,14 +212,24 @@ class JSONLParser {
 
             // Check if answered
             if message.type == "user" {
-                if hasUnAnsweredQuestion {
-                    hasUnAnsweredQuestion = false
+                // Check if this is a tool_result (response to assistant's tool use)
+                let isToolResult = message.message?.content?.contains { $0.type == "tool_result" } ?? false
+
+                if isToolResult {
+                    // This is a tool result, so tool completed
+                    lastMessageWasToolUse = false
+                    if hasUnAnsweredQuestion {
+                        // User has responded to AskUserQuestion
+                        hasUnAnsweredQuestion = false
+                    }
+                } else {
+                    // This is a new user prompt - mark as unanswered
+                    lastUserPromptAnswered = false
                 }
-                lastMessageWasToolUse = false
             }
         }
 
-        let hasActiveQuestion = hasUnAnsweredQuestion || lastMessageWasToolUse
+        let hasActiveQuestion = hasUnAnsweredQuestion || lastMessageWasToolUse || !lastUserPromptAnswered
 
         // Extract project name from path
         if projectPath.isEmpty {

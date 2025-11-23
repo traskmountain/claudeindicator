@@ -53,6 +53,12 @@ The app considers a session "waiting" when:
    - No subsequent user message or tool_result
    - This catches permission prompts and blocked operations
 
+3. **Unanswered user prompt:**
+   - User sent a new message/prompt
+   - No subsequent assistant response yet
+   - Distinguishes between regular prompts and tool_result messages
+   - Icon turns red when Claude is actively processing
+
 ### JSONL Structure
 
 Claude Code logs sessions in JSONL format at:
@@ -127,11 +133,92 @@ launchctl load ~/Library/LaunchAgents/com.claudecode.indicator.plist
 - Icon should turn red
 - Approve or deny → icon turns green
 
+**Test unanswered prompt detection:**
+- Send a new message to Claude in any session
+- Icon should immediately turn red
+- Wait for Claude to respond
+- Icon turns green after response completes
+
 **Test multiple sessions:**
 - Open Claude Code in multiple directories
 - Each session appears in the dock menu
 - Sessions with questions appear at the top
 - Other sessions listed below
+
+**Manual detection logic test:**
+You can test the detection logic manually using this Swift script:
+```bash
+cat > /tmp/test_detection.swift << 'EOF'
+import Foundation
+
+struct ClaudeMessage: Codable {
+    let type: String?
+    let message: MessageContent?
+
+    struct MessageContent: Codable {
+        let role: String?
+        let content: [Content]?
+
+        struct Content: Codable {
+            let type: String?
+            let name: String?
+        }
+    }
+}
+
+let homeDir = FileManager.default.homeDirectoryForCurrentUser
+let filePath = homeDir.appendingPathComponent(".claude/projects/-Users-red-claude-prompt-ClaudeIndicator/b290f2b2-2c24-4d2e-8623-2806e5734c82.jsonl").path
+
+guard let data = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+    print("Failed to read file")
+    exit(1)
+}
+
+let lines = data.components(separatedBy: .newlines).filter { !$0.isEmpty }
+print("Total lines: \(lines.count)")
+
+var lastMessageWasToolUse = false
+var lastUserPromptAnswered = true
+var lastType = ""
+
+for (index, line) in lines.enumerated() {
+    guard let jsonData = line.data(using: .utf8),
+          let message = try? JSONDecoder().decode(ClaudeMessage.self, from: jsonData) else {
+        continue
+    }
+
+    if message.type == "assistant", let content = message.message?.content {
+        lastUserPromptAnswered = true
+        lastMessageWasToolUse = false
+        for item in content {
+            if item.type == "tool_use" {
+                lastMessageWasToolUse = true
+                print("Line \(index + 1): Found tool_use, name=\(item.name ?? "none")")
+            }
+        }
+    }
+
+    if message.type == "user" {
+        let isToolResult = message.message?.content?.contains { $0.type == "tool_result" } ?? false
+        if isToolResult {
+            lastMessageWasToolUse = false
+        } else {
+            lastUserPromptAnswered = false
+            print("Line \(index + 1): Found user prompt (unanswered)")
+        }
+    }
+
+    lastType = message.type ?? "unknown"
+}
+
+print("Last message type: \(lastType)")
+print("lastMessageWasToolUse: \(lastMessageWasToolUse)")
+print("lastUserPromptAnswered: \(lastUserPromptAnswered)")
+print("Should show RED: \(lastMessageWasToolUse || !lastUserPromptAnswered)")
+EOF
+
+swift /tmp/test_detection.swift
+```
 
 ## Key Design Decisions
 
