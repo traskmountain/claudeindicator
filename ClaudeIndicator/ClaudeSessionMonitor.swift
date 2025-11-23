@@ -25,8 +25,8 @@ class ClaudeSessionMonitor {
             self?.checkAllSessions()
         }
 
-        // Also poll periodically (every 2 seconds) to catch any missed changes
-        checkTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // Also poll periodically (every 0.5 seconds) to catch any missed changes
+        checkTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkAllSessions()
         }
     }

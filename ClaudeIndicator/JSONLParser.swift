@@ -37,13 +37,28 @@ class JSONLParser {
             try? fileHandle.close()
         }
 
-        // Read the file content
+        // Read only the last 50KB of the file for better performance
+        guard let fileSize = try? fileHandle.seekToEnd() else {
+            return false
+        }
+
+        let bytesToRead = min(fileSize, 50_000) // Read last 50KB
+        if fileSize > bytesToRead {
+            try? fileHandle.seek(toOffset: fileSize - bytesToRead)
+        } else {
+            try? fileHandle.seek(toOffset: 0)
+        }
+
         guard let data = try? fileHandle.readToEnd(),
               let content = String(data: data, encoding: .utf8) else {
             return false
         }
 
-        let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        // Split by newlines and get only complete lines (skip first line as it might be partial)
+        var lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        if fileSize > bytesToRead && !lines.isEmpty {
+            lines.removeFirst() // Remove potentially partial first line
+        }
 
         // Track if we've seen an AskUserQuestion that hasn't been answered
         var hasUnAnsweredQuestion = false
@@ -121,12 +136,28 @@ class JSONLParser {
             try? fileHandle.close()
         }
 
+        // Read only the last 50KB of the file for better performance
+        guard let fileSize = try? fileHandle.seekToEnd() else {
+            return nil
+        }
+
+        let bytesToRead = min(fileSize, 50_000) // Read last 50KB
+        if fileSize > bytesToRead {
+            try? fileHandle.seek(toOffset: fileSize - bytesToRead)
+        } else {
+            try? fileHandle.seek(toOffset: 0)
+        }
+
         guard let data = try? fileHandle.readToEnd(),
               let content = String(data: data, encoding: .utf8) else {
             return nil
         }
 
-        let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        // Split by newlines and get only complete lines (skip first line as it might be partial)
+        var lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        if fileSize > bytesToRead && !lines.isEmpty {
+            lines.removeFirst() // Remove potentially partial first line
+        }
 
         var hasUnAnsweredQuestion = false
         var lastMessageWasToolUse = false
