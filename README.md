@@ -12,6 +12,7 @@ A macOS dock app that monitors all Claude Code sessions and provides real-time v
   - 🔴 User prompt waiting for Claude's response
   - ⏸ Tool execution pending (permission prompt)
   - ❓ AskUserQuestion waiting for answer
+- **Tab identification**: Shows terminal tab details (activity, command) for each session
 
 ### Smart Session Management
 - **Configurable time window**: Only monitor recent sessions (default: 1 hour)

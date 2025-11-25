@@ -60,8 +60,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 for session in sessionsWithQuestions {
                     let projectName = extractProjectName(from: session.projectPath)
                     let indicator = getIndicatorForSession(session)
+                    let tabInfo = getTerminalTabInfo(for: session)
+
+                    let title = tabInfo.isEmpty ? "   \(indicator) \(projectName)" : "   \(indicator) \(projectName) — \(tabInfo)"
                     let item = NSMenuItem(
-                        title: "   \(indicator) \(projectName)",
+                        title: title,
                         action: #selector(openTerminalForSession(_:)),
                         keyEquivalent: ""
                     )
@@ -303,6 +306,112 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let url = URL(fileURLWithPath: path)
         return url.lastPathComponent
+    }
+
+    func getTerminalTabInfo(for session: SessionInfo) -> String {
+        let projectName = extractProjectName(from: session.projectPath)
+        let projectPath = session.projectPath
+
+        let escapedName = projectName.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedPath = projectPath.replacingOccurrences(of: "\"", with: "\\\"")
+
+        let script = """
+        set tabInfo to ""
+
+        -- Try Terminal.app
+        try
+            tell application "Terminal"
+                if running then
+                    repeat with w in windows
+                        try
+                            set winName to name of w
+                            if winName contains "\(escapedName)" or winName contains "\(escapedPath)" then
+                                -- Extract the middle part (between project name and command)
+                                set tabInfo to winName
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end if
+            end tell
+        end try
+
+        -- Try iTerm2
+        if tabInfo is "" then
+            try
+                tell application "iTerm"
+                    if running then
+                        repeat with w in windows
+                            repeat with t in tabs of w
+                                repeat with s in sessions of t
+                                    try
+                                        set sessName to name of s
+                                        if sessName contains "\(escapedName)" or sessName contains "\(escapedPath)" then
+                                            set tabInfo to sessName
+                                            exit repeat
+                                        end if
+                                    end try
+                                end repeat
+                                if tabInfo is not "" then exit repeat
+                            end repeat
+                            if tabInfo is not "" then exit repeat
+                        end repeat
+                    end if
+                end tell
+            end try
+        end if
+
+        return tabInfo
+        """
+
+        var errorDict: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            let result = appleScript.executeAndReturnError(&errorDict)
+            let fullTitle = result.stringValue ?? ""
+
+            // Extract meaningful part from window title
+            // Format: "projectname — activity — command ◂ more — dimensions"
+            // We want to extract "activity — command" part
+            return extractTabDescription(from: fullTitle, projectName: projectName)
+        }
+
+        return ""
+    }
+
+    func extractTabDescription(from fullTitle: String, projectName: String) -> String {
+        // Remove the project name from the beginning
+        var description = fullTitle
+
+        // Find the project name and remove everything before and including it
+        if let range = description.range(of: projectName) {
+            description = String(description[range.upperBound...])
+        }
+
+        // Clean up separators at the start
+        description = description.trimmingCharacters(in: CharacterSet(charactersIn: " —"))
+
+        // Split by common separators and take meaningful parts
+        let components = description.components(separatedBy: " — ")
+
+        // Take first 2-3 meaningful components
+        var meaningful: [String] = []
+        for component in components {
+            let trimmed = component.trimmingCharacters(in: .whitespaces)
+            // Skip dimension info (like "122×33")
+            if trimmed.contains("×") || trimmed.contains("TMPDIR") {
+                break
+            }
+            // Skip empty or very short components
+            if trimmed.count > 1 && !trimmed.starts(with: "◂") {
+                meaningful.append(trimmed)
+            }
+            if meaningful.count >= 2 {
+                break
+            }
+        }
+
+        let result = meaningful.joined(separator: " — ")
+        return result.isEmpty ? "" : result
     }
 
     func updateDockIcon(isAsking: Bool) {
