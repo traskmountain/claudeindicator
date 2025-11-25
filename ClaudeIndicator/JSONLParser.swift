@@ -24,6 +24,8 @@ struct SessionInfo {
     let projectPath: String
     let sessionId: String
     let hasActiveQuestion: Bool
+    let lastModified: Date
+    let questionType: String? // "AskUserQuestion", "ToolPending", "UserPrompt", or nil
 }
 
 class JSONLParser {
@@ -183,6 +185,7 @@ class JSONLParser {
         var lastUserPromptAnswered = true
         var projectPath = ""
         var sessionId = ""
+        var questionType: String? = nil
 
         for line in lines {
             guard let jsonData = line.data(using: .utf8),
@@ -209,13 +212,18 @@ class JSONLParser {
                 // Assistant responded, so last user prompt is answered
                 lastUserPromptAnswered = true
                 lastMessageWasToolUse = false
+                questionType = nil
 
                 for item in content {
                     if item.name == "AskUserQuestion" {
                         hasUnAnsweredQuestion = true
+                        questionType = "AskUserQuestion"
                     }
                     if item.type == "tool_use" {
                         lastMessageWasToolUse = true
+                        if questionType == nil {
+                            questionType = "ToolPending"
+                        }
                     }
                 }
             }
@@ -228,6 +236,7 @@ class JSONLParser {
                 if isToolResult {
                     // This is a tool result, so tool completed
                     lastMessageWasToolUse = false
+                    questionType = nil
                     if hasUnAnsweredQuestion {
                         // User has responded to AskUserQuestion
                         hasUnAnsweredQuestion = false
@@ -235,6 +244,7 @@ class JSONLParser {
                 } else {
                     // This is a new user prompt - mark as unanswered
                     lastUserPromptAnswered = false
+                    questionType = "UserPrompt"
                 }
             }
         }
@@ -249,11 +259,17 @@ class JSONLParser {
             projectPath = projectFolder.replacingOccurrences(of: "-Users-red-", with: "~/")
         }
 
+        // Get file modification time
+        let attributes = try? FileManager.default.attributesOfItem(atPath: filePath)
+        let lastModified = attributes?[.modificationDate] as? Date ?? Date.distantPast
+
         return SessionInfo(
             filePath: filePath,
             projectPath: projectPath,
             sessionId: sessionId,
-            hasActiveQuestion: hasActiveQuestion
+            hasActiveQuestion: hasActiveQuestion,
+            lastModified: lastModified,
+            questionType: hasActiveQuestion ? questionType : nil
         )
     }
 

@@ -59,8 +59,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                 for session in sessionsWithQuestions {
                     let projectName = extractProjectName(from: session.projectPath)
+                    let indicator = getIndicatorForSession(session)
                     let item = NSMenuItem(
-                        title: "   \(projectName)",
+                        title: "   \(indicator) \(projectName)",
                         action: #selector(openTerminalForSession(_:)),
                         keyEquivalent: ""
                     )
@@ -92,69 +93,206 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(NSMenuItem.separator())
+
+        // Add preferences submenu
+        let prefsItem = NSMenuItem(title: "Preferences", action: nil, keyEquivalent: "")
+        let prefsMenu = NSMenu()
+
+        let currentWindow = SettingsManager.shared.sessionTimeWindowMinutes
+        let timeWindowItem = NSMenuItem(title: "Session Time Window: \(formatTimeWindow(currentWindow))", action: nil, keyEquivalent: "")
+        timeWindowItem.isEnabled = false
+        prefsMenu.addItem(timeWindowItem)
+
+        for (label, minutes) in SettingsManager.presets {
+            let item = NSMenuItem(title: "  \(label)", action: #selector(changeTimeWindow(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = minutes
+            if minutes == currentWindow {
+                item.state = .on
+            }
+            prefsMenu.addItem(item)
+        }
+
+        prefsItem.submenu = prefsMenu
+        menu.addItem(prefsItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Add Refresh Sessions option
+        let refreshItem = NSMenuItem(title: "Refresh Sessions", action: #selector(refreshSessions(_:)), keyEquivalent: "r")
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ClaudeIndicator", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    func getIndicatorForSession(_ session: SessionInfo) -> String {
+        guard let type = session.questionType else { return "❓" }
+        switch type {
+        case "AskUserQuestion":
+            return "❓"
+        case "ToolPending":
+            return "⏸"
+        case "UserPrompt":
+            return "🔴"
+        default:
+            return "❓"
+        }
+    }
+
+    func formatTimeWindow(_ minutes: Int) -> String {
+        if minutes < 60 {
+            return "\(minutes) min"
+        } else if minutes < 1440 {
+            let hours = minutes / 60
+            return "\(hours) hour\(hours > 1 ? "s" : "")"
+        } else {
+            let days = minutes / 1440
+            return "\(days) day\(days > 1 ? "s" : "")"
+        }
+    }
+
+    @objc func changeTimeWindow(_ sender: NSMenuItem) {
+        SettingsManager.shared.sessionTimeWindowMinutes = sender.tag
+        // Force a refresh
+        sessionMonitor.checkAllSessionsNow()
+        updateDockMenu()
+    }
+
+    @objc func refreshSessions(_ sender: NSMenuItem) {
+        print("Manual refresh requested")
+        sessionMonitor.checkAllSessionsNow()
+
+        // Show brief notification
+        let notification = NSUserNotification()
+        notification.title = "Refreshing Sessions"
+        notification.informativeText = "Scanning for Claude Code sessions..."
+        notification.soundName = nil
+        NSUserNotificationCenter.default.deliver(notification)
+
+        // Update menu after a short delay to show refreshed data
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.updateDockMenu()
+        }
     }
 
     @objc func openTerminalForSession(_ sender: NSMenuItem) {
         guard let session = sender.representedObject as? SessionInfo else { return }
 
-        // Copy the project path to clipboard
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(session.projectPath, forType: .string)
+        let projectName = extractProjectName(from: session.projectPath)
+        let projectPath = session.projectPath
 
-        // Try to activate Terminal and bring it to front
+        print("Attempting to focus window:")
+        print("  Project Name: \(projectName)")
+        print("  Project Path: \(projectPath)")
+
+        // Escape quotes in paths for AppleScript
+        let escapedName = projectName.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedPath = projectPath.replacingOccurrences(of: "\"", with: "\\\"")
+
+        // Build AppleScript to find and focus the window
         let script = """
-        tell application "System Events"
-            -- Check for various terminal apps
-            set terminalFound to false
+        set windowFound to false
+        set targetPath to "\(escapedPath)"
+        set projectName to "\(escapedName)"
 
-            -- Try Terminal
-            if exists process "Terminal" then
-                tell process "Terminal"
-                    set frontmost to true
-                end tell
-                set terminalFound to true
-            end if
-
-            -- Try iTerm2
-            if not terminalFound and exists process "iTerm2" then
-                tell application "iTerm2"
+        -- Try Terminal.app
+        try
+            tell application "Terminal"
+                if running then
                     activate
-                end tell
-                set terminalFound to true
-            end if
+                    repeat with w in windows
+                        try
+                            set winName to name of w
+                            if winName contains projectName or winName contains targetPath then
+                                set index of w to 1
+                                set windowFound to true
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end if
+            end tell
+        end try
 
-            -- Try iTerm
-            if not terminalFound and exists process "iTerm" then
+        -- Try iTerm2
+        if not windowFound then
+            try
                 tell application "iTerm"
-                    activate
+                    if running then
+                        activate
+                        repeat with w in windows
+                            repeat with t in tabs of w
+                                repeat with s in sessions of t
+                                    try
+                                        set sessName to name of s
+                                        if sessName contains projectName or sessName contains targetPath then
+                                            tell current window
+                                                set index to 1
+                                            end tell
+                                            select w
+                                            tell w
+                                                select t
+                                            end tell
+                                            set windowFound to true
+                                            exit repeat
+                                        end if
+                                    end try
+                                end repeat
+                                if windowFound then exit repeat
+                            end repeat
+                            if windowFound then exit repeat
+                        end repeat
+                    end if
                 end tell
-                set terminalFound to true
-            end if
+            end try
+        end if
 
-            -- Try WezTerm
-            if not terminalFound and exists process "wezterm-gui" then
-                tell process "wezterm-gui"
-                    set frontmost to true
+        -- Try WezTerm - just activate for now since window API is limited
+        if not windowFound then
+            try
+                tell application "System Events"
+                    if exists process "wezterm-gui" then
+                        tell process "wezterm-gui"
+                            set frontmost to true
+                            set windowFound to true
+                        end tell
+                    end if
                 end tell
-                set terminalFound to true
-            end if
-        end tell
+            end try
+        end if
+
+        return windowFound
         """
 
         var errorDict: NSDictionary?
+        var windowFound = false
+
         if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&errorDict)
+            let result = appleScript.executeAndReturnError(&errorDict)
+            windowFound = result.booleanValue
+            print("  Window Found: \(windowFound)")
             if let error = errorDict {
-                print("AppleScript error: \(error)")
+                print("  AppleScript error: \(error)")
             }
+        } else {
+            print("  Failed to create AppleScript")
         }
 
-        // Show a notification
+        // Show notification
         let notification = NSUserNotification()
-        notification.title = "Terminal Activated"
-        notification.informativeText = "Path copied: \(extractProjectName(from: session.projectPath))"
+        if windowFound {
+            notification.title = "Terminal Activated"
+            notification.informativeText = "Focused: \(projectName)"
+        } else {
+            notification.title = "Could Not Find Window"
+            notification.informativeText = "Searching for: \(projectName)"
+            // Copy path to clipboard as fallback
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(projectPath, forType: .string)
+        }
         notification.soundName = nil
         NSUserNotificationCenter.default.deliver(notification)
     }

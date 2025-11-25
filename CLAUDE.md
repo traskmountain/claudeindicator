@@ -15,16 +15,24 @@ ClaudeIndicator is a macOS dock application that monitors all Claude Code sessio
 
 **ClaudeSessionMonitor.swift** - Session orchestration
 - Monitors all Claude Code sessions via file system watching
-- Polls every 2 seconds for changes
+- Polls every 0.5 seconds for changes
+- Filters sessions by configurable time window
 - Aggregates state across all sessions
 - Delegates state changes to the app
 
 **JSONLParser.swift** - Log file parsing
 - Parses `.jsonl` session files from `~/.claude/projects/`
-- Detects two types of waiting states:
+- Detects three types of waiting states:
   1. `AskUserQuestion` tool usage (formal blocking questions)
   2. Pending tool execution (tool_use without tool_result)
-- Extracts session metadata (project path, session ID)
+  3. Unanswered user prompt (user message without assistant response)
+- Extracts session metadata (project path, session ID, last modified time, question type)
+- Tracks question type for visual indicators
+
+**SettingsManager.swift** - Preferences management
+- UserDefaults-based storage for persistent settings
+- Manages session time window (default: 60 minutes)
+- Provides presets: 5 min, 15 min, 30 min, 1 hour, 4 hours, 1 day
 
 **DirectoryWatcher.swift** - File system monitoring
 - Uses DispatchSource for low-level file system events
@@ -87,18 +95,18 @@ Each line is a JSON object representing a message:
 ### State Flow
 
 ```
-File System Event
-  → DirectoryWatcher callback
-  → ClaudeSessionMonitor.checkAllSessions()
+File System Event or Timer (0.5s)
+  → DirectoryWatcher callback or checkAllSessions()
   → JSONLParser.getAllSessionInfo()
   → For each session file:
-      → Parse JSONL
-      → Check for pending questions/tools
-      → Extract metadata
-  → Aggregate: ANY session waiting = RED
+      → Parse last 50KB of JSONL
+      → Check for pending questions/tools/prompts
+      → Extract metadata (path, sessionId, lastModified, questionType)
+  → Filter sessions by time window (SettingsManager)
+  → Aggregate: ANY recent session waiting = RED
   → Notify AppDelegate
-  → Update dock icon + menu
-  → Play sound if state changed
+  → Update dock icon + menu (with emoji indicators)
+  → Play sound if state changed to RED
 ```
 
 ## Building and Testing
@@ -121,29 +129,27 @@ launchctl load ~/Library/LaunchAgents/com.claudecode.indicator.plist
 
 ### Testing
 
-**Test AskUserQuestion detection:**
-- Have Claude ask a question using the AskUserQuestion tool
-- Icon should turn red with sound alert
-- Right-click shows session in "Sessions with Questions"
-- Answer the question → icon turns green
+**Test detection patterns:**
+1. **AskUserQuestion (❓)**: Have Claude use AskUserQuestion tool → icon red, session shows ❓
+2. **Tool pending (⏸)**: Trigger bash command requiring permission → icon red, session shows ⏸
+3. **User prompt (🔴)**: Send message to Claude → icon red immediately, session shows 🔴
 
-**Test permission prompt detection:**
-- Trigger a bash command that requires permission
-- Claude will show "Do you want to proceed?" prompt
-- Icon should turn red
-- Approve or deny → icon turns green
+**Test time window filtering:**
+1. Set time window to 5 minutes (Preferences menu)
+2. Archive old sessions: `find ~/.claude/projects -name "*.jsonl" -mtime +1 -exec mv {} ~/.claude/projects-archive/ \;`
+3. Verify only recent sessions appear in menu
+4. Verify old sessions don't trigger red icon
 
-**Test unanswered prompt detection:**
-- Send a new message to Claude in any session
-- Icon should immediately turn red
-- Wait for Claude to respond
-- Icon turns green after response completes
+**Test menu features:**
+1. Right-click icon → verify sessions grouped correctly
+2. Click session → verify terminal window focuses
+3. Click "Refresh Sessions" → verify menu updates
+4. Change time window → verify menu updates with filtered sessions
 
-**Test multiple sessions:**
-- Open Claude Code in multiple directories
-- Each session appears in the dock menu
-- Sessions with questions appear at the top
-- Other sessions listed below
+**Test preferences:**
+1. Change time window to different presets
+2. Restart app → verify setting persisted
+3. Sessions outside window should not appear
 
 **Manual detection logic test:**
 You can test the detection logic manually using this Swift script:
@@ -224,34 +230,45 @@ swift /tmp/test_detection.swift
 
 1. **Polling + FSEvents:** Combined approach for reliability
    - FSEvents catches most changes immediately
-   - 2-second polling catches missed events
+   - 0.5-second polling catches missed events (faster than original 2s)
    - Ensures no missed state changes
 
-2. **Tool execution detection:** Catches permission prompts
+2. **Time-based filtering (NEW):** Prevents false positives from stale sessions
+   - Configurable time window (default: 1 hour)
+   - Only monitors sessions modified within window
+   - Persisted in UserDefaults across app restarts
+   - Key improvement addressing "always red" issue
+
+3. **Tool execution detection:** Catches permission prompts
    - Permission prompts don't use AskUserQuestion
    - They appear as pending tool executions
    - Last message is tool_use without result
 
-3. **Sound only on transition:** Prevents alert spam
+4. **Question type tracking (NEW):** Visual feedback in menu
+   - 🔴 User prompt = actively processing
+   - ⏸ Tool pending = waiting for permission
+   - ❓ AskUserQuestion = explicit question
+   - Helps users identify why session is waiting
+
+5. **Sound only on transition:** Prevents alert spam
    - Only play sound when green → red
    - Silent when staying red or red → green
    - Better user experience
 
-4. **Right-click menu:** Better than hover tooltip
-   - More reliable on macOS
-   - Can show multiple sessions
-   - Clickable actions (focus terminal)
-   - Standard dock app pattern
+6. **Terminal window focusing (NEW):** Direct navigation to sessions
+   - AppleScript searches Terminal.app/iTerm2 windows
+   - Matches by project name or full path
+   - Brings specific window to front
+   - Fallback: copies path to clipboard
 
 ## Future Enhancement Ideas
 
-- [ ] Add preferences panel for customization
 - [ ] Configurable colors/sounds
-- [ ] Notification center integration
-- [ ] Filter by session age (ignore old sessions)
-- [ ] Deep link to specific terminal window
+- [ ] Notification center integration (currently uses deprecated NSUserNotification)
 - [ ] Badge count showing number of waiting sessions
 - [ ] Status bar mode (menu bar instead of dock)
+- [ ] Per-project time window overrides
+- [ ] Support for more terminal apps (Kitty, Alacritty)
 
 ## Troubleshooting
 

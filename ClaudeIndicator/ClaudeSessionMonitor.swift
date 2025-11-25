@@ -41,17 +41,27 @@ class ClaudeSessionMonitor {
         checkQueue.async { [weak self] in
             guard let self = self else { return }
 
-            let sessions = JSONLParser.getAllSessionInfo()
-            let hasActiveQuestion = sessions.contains { $0.hasActiveQuestion }
+            let allSessions = JSONLParser.getAllSessionInfo()
+
+            // Filter sessions by time window
+            let timeWindow = SettingsManager.shared.sessionTimeWindowSeconds
+            let cutoffDate = Date().addingTimeInterval(-timeWindow)
+            let recentSessions = allSessions.filter { $0.lastModified >= cutoffDate }
+
+            let hasActiveQuestion = recentSessions.contains { $0.hasActiveQuestion }
 
             // Always notify with updated session list
             self.currentState = hasActiveQuestion
-            self.currentSessions = sessions
+            self.currentSessions = recentSessions
 
             DispatchQueue.main.async {
-                self.delegate?.sessionStateDidChange(isAskingQuestion: hasActiveQuestion, sessions: sessions)
+                self.delegate?.sessionStateDidChange(isAskingQuestion: hasActiveQuestion, sessions: recentSessions)
             }
         }
+    }
+
+    func checkAllSessionsNow() {
+        checkAllSessions()
     }
 
     func getCurrentSessions() -> [SessionInfo] {
